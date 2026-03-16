@@ -1,0 +1,14 @@
+{
+  "name": "agentd",
+  "version": "0.1.0",
+  "description": "Persistent remote shells for AI agents. One connection, stateful commands, no SSH gymnastics.",
+  "author": {
+    "name": "Prince Rawat",
+    "url": "https://github.com/MrPrinceRawat"
+  },
+  "homepage": "https://github.com/MrPrinceRawat/agentd",
+  "repository": "https://github.com/MrPrinceRawat/agentd",
+  "license": "MIT",
+  "keywords": ["ssh", "remote", "agent", "shell", "persistent"],
+  "skills": "./skills/"
+}
