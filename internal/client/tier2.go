@@ -41,7 +41,7 @@ func RunTier2(s *Session, command string) (string, int, error) {
 
 // Run dispatches to the correct tier
 func Run(s *Session, command string) (string, int, error) {
-	if s.Tier == Tier2 {
+	if s.Tier == Tier2 || s.Tier == Tier3 {
 		return RunTier2(s, command)
 	}
 	return RunTier1(s, command)

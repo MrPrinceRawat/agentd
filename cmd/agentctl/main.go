@@ -14,7 +14,11 @@ func usage() {
 Usage:
   agentctl connect <name>                     Connect to a host
   agentctl run <command>                      Run command on active session
+  agentctl run --bg <command>                 Run in background, return job ID
   agentctl run --on <name> <command>          Run on a specific session
+  agentctl jobs                               List background jobs
+  agentctl job <id>                           Get job output
+  agentctl kill <id>                          Kill a background job
   agentctl disconnect [name]                  Close session
   agentctl hosts add <name> <user@host> [-i key] [-p port]
   agentctl hosts list                         List configured hosts
@@ -40,6 +44,12 @@ func main() {
 		cmdHosts()
 	case "status":
 		cmdStatus()
+	case "jobs":
+		cmdJobs()
+	case "job":
+		cmdJob()
+	case "kill":
+		cmdKill()
 	case "install":
 		cmdInstall()
 	case "help", "--help", "-h":
@@ -89,18 +99,32 @@ func cmdConnect() {
 
 func cmdRun() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: agentctl run <command>")
+		fmt.Fprintln(os.Stderr, "usage: agentctl run [--bg] [--on name] <command>")
 		os.Exit(1)
 	}
 
 	sessionName := ""
+	background := false
 	commandStart := 2
 
-	// Check for --on flag
-	if os.Args[2] == "--on" && len(os.Args) >= 5 {
-		sessionName = os.Args[3]
-		commandStart = 4
+	// Parse flags
+	for i := 2; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--bg":
+			background = true
+			commandStart = i + 1
+		case "--on":
+			if i+1 < len(os.Args) {
+				sessionName = os.Args[i+1]
+				commandStart = i + 2
+				i++
+			}
+		default:
+			commandStart = i
+			goto done
+		}
 	}
+done:
 
 	command := strings.Join(os.Args[commandStart:], " ")
 
@@ -114,6 +138,16 @@ func cmdRun() {
 		sessionName = sessions[0]
 	}
 
+	if background {
+		output, _, err := client.SendCommand(sessionName, "__BG__ "+command)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("job %s\n", output)
+		return
+	}
+
 	output, exitCode, err := client.SendCommand(sessionName, command)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -124,6 +158,69 @@ func cmdRun() {
 		fmt.Println(output)
 	}
 	os.Exit(exitCode)
+}
+
+func cmdJobs() {
+	sessions := client.ListActiveSessions()
+	if len(sessions) == 0 {
+		fmt.Fprintln(os.Stderr, "not connected")
+		os.Exit(1)
+	}
+
+	output, _, err := client.SendCommand(sessions[0], "__JOBS__")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if output != "" {
+		fmt.Println(output)
+	} else {
+		fmt.Println("No jobs")
+	}
+}
+
+func cmdJob() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: agentctl job <id>")
+		os.Exit(1)
+	}
+
+	jobID := os.Args[2]
+	sessions := client.ListActiveSessions()
+	if len(sessions) == 0 {
+		fmt.Fprintln(os.Stderr, "not connected")
+		os.Exit(1)
+	}
+
+	output, _, err := client.SendCommand(sessions[0], "__JOBOUT__ "+jobID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if output != "" {
+		fmt.Println(output)
+	}
+}
+
+func cmdKill() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: agentctl kill <id>")
+		os.Exit(1)
+	}
+
+	jobID := os.Args[2]
+	sessions := client.ListActiveSessions()
+	if len(sessions) == 0 {
+		fmt.Fprintln(os.Stderr, "not connected")
+		os.Exit(1)
+	}
+
+	output, _, err := client.SendCommand(sessions[0], "__KILL__ "+jobID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(output)
 }
 
 func cmdDisconnect() {

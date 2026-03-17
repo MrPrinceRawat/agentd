@@ -1,6 +1,6 @@
 # agentd
 
-Persistent remote shells for AI agents. One connection, stateful commands, no SSH gymnastics.
+Persistent remote shells for AI agents. One connection, stateful commands, survives SSH crashes.
 
 ## The problem
 
@@ -12,20 +12,22 @@ ssh -i ~/.ssh/key user@host "cd /app && cat config.py"
 ssh -i ~/.ssh/key user@host "cd /app && sudo systemctl restart app"
 ```
 
-New connection every time. State lost every time. The full SSH command repeated every time.
+New connection every time. State lost every time. Long-running commands block everything. SSH drops kill your work.
 
 ## The fix
 
 ```bash
 agentctl connect myserver
 agentctl run "cd /app"
-agentctl run "ls"                    # still in /app
-agentctl run "cat config.py"         # still in /app
-agentctl run "sudo systemctl restart app"
-agentctl disconnect
+agentctl run "ls"                              # still in /app
+agentctl run "cat config.py"                   # still in /app
+agentctl run --bg "python train.py"            # runs in background, returns job ID
+agentctl run "sudo systemctl restart app"      # don't wait for training
+agentctl jobs                                  # check on background jobs
+agentctl job 1                                 # get training output
 ```
 
-One connection. State persists. `cd` works. Env vars stick.
+One connection. State persists. Background jobs survive SSH crashes.
 
 ## Install
 
@@ -39,7 +41,7 @@ go install github.com/MrPrinceRawat/agentd/cmd/agentctl@latest
 # Add a host
 agentctl hosts add myserver ubuntu@10.0.0.1 -i ~/.ssh/id_rsa
 
-# Connect (runs in foreground — open a new tab or use &)
+# Connect (runs in foreground — use & or a separate tab)
 agentctl connect myserver &
 
 # Run commands
@@ -53,6 +55,43 @@ agentctl run "echo $DB" # → prod
 agentctl disconnect
 ```
 
+## Background jobs
+
+Long-running commands don't have to block:
+
+```bash
+agentctl run --bg "pip install torch"    # → job 1
+agentctl run --bg "python train.py"      # → job 2
+agentctl run "echo still working"        # not blocked
+
+agentctl jobs                            # list all jobs
+# 1 done  "pip install torch"
+# 2 running "python train.py"
+
+agentctl job 1                           # get job output
+agentctl kill 2                          # stop a job
+```
+
+Requires agentd daemon on the remote (tier 3). On first connect, you'll be prompted to install it.
+
+## SSH crash recovery
+
+With the agentd daemon installed, your work survives SSH disconnects:
+
+```bash
+agentctl connect myserver &
+agentctl run --bg "python train.py"      # → job 1
+
+# SSH drops, WiFi dies, laptop sleeps — doesn't matter
+
+agentctl connect myserver &              # reconnect
+agentctl jobs                            # job still running
+# 1 running "python train.py"
+agentctl job 1                           # get output so far
+```
+
+The daemon runs as a systemd service on the remote. SSH is just a tunnel — when it drops, the daemon keeps going.
+
 ## Multiple servers
 
 ```bash
@@ -63,18 +102,62 @@ agentctl run --on web-server "nginx -t"
 agentctl run --on db-server "pg_isready"
 
 agentctl status
-# web-server → tier 1 ubuntu@10.0.0.1
+# web-server → tier 3 ubuntu@10.0.0.1
 # db-server  → tier 1 postgres@10.0.0.2
 ```
+
+## How it works
+
+Three tiers, automatic negotiation:
+
+| Tier | What | Requires | Survives SSH crash |
+|------|------|----------|--------------------|
+| **Tier 1** | Persistent bash over SSH | Nothing | No |
+| **Tier 2** | agentd protocol over SSH pipe | `agentd` binary in PATH | No |
+| **Tier 3** | agentd daemon via SSH tunnel | `agentd` systemd service | **Yes** |
+
+On `agentctl connect`, the client tries tier 3 first. If the daemon isn't installed, it prompts you to install it. If you decline, it falls back to tier 1.
+
+**Tier 3 architecture:**
+
+```
+agentctl ─── SSH tunnel ─── agentd (systemd service)
+                │                    │
+          just a tunnel         persistent daemon
+          can drop/reconnect    owns shell + jobs
+                                survives everything
+```
+
+## Installing agentd on a remote
+
+Automatic (prompted on first connect):
+```
+$ agentctl connect myserver
+agentd not installed on myserver. Install? [y/n] y
+Installing agentd on myserver...
+Install complete.
+Connected to myserver (tier 3)
+```
+
+Manual:
+```bash
+curl -sSL https://raw.githubusercontent.com/MrPrinceRawat/agentd/main/install.sh | bash
+```
+
+The install script downloads the binary, creates a systemd user service, and enables it.
 
 ## All commands
 
 ```
 agentctl connect <name>              Connect to a host
-agentctl run <command>               Run on active session
+agentctl run <command>               Run on active session (blocking)
+agentctl run --bg <command>          Run in background (returns job ID)
 agentctl run --on <name> <command>   Run on specific host
+agentctl jobs                        List background jobs
+agentctl job <id>                    Get job output
+agentctl kill <id>                   Kill a background job
 agentctl disconnect [name]           Close session
-agentctl hosts add <n> <user@host> [-i key]
+agentctl hosts add <n> <user@host> [-i key] [-p port]
 agentctl hosts list                  Show configured hosts
 agentctl hosts remove <name>         Remove a host
 agentctl status                      Show active sessions
@@ -82,27 +165,11 @@ agentctl status                      Show active sessions
 
 ## Claude Code plugin
 
-Install as a Claude Code plugin:
-
 ```bash
 claude plugin add MrPrinceRawat/agentd
 ```
 
-Then just tell Claude: "check the logs on my server" or "restart the app" — it uses `agentctl` automatically. No more raw SSH commands.
-
-Or add the skill manually — copy `skill/SKILL.md` to `.claude/skills/remote/SKILL.md` in your project.
-
-## How it works
-
-`agentctl connect` opens an SSH connection and starts a persistent bash shell on the remote. It runs a local Unix socket server that accepts commands from other `agentctl` processes. Every `agentctl run` sends the command through the socket to the same bash shell — so `cd`, env vars, and aliases persist between calls.
-
-No daemon on the remote. No ports to open. No extra auth. Just SSH.
-
-## Roadmap
-
-**Today (tier 1):** persistent shell over SSH. Works on any server.
-
-**Coming (tier 2):** install `agentd` on the remote for: native file operations, streaming output, background jobs, machine context, smart errors, and granular permissions.
+Then just tell Claude: "check the logs on my server" or "run training in the background" — it uses `agentctl` automatically.
 
 ## License
 

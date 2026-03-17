@@ -60,6 +60,58 @@ func handleConn(conn net.Conn, session *Session) {
 		return
 	}
 
+	// Handle async commands (tier 2/3 only)
+	if strings.HasPrefix(command, "__BG__ ") && (session.Tier == Tier2 || session.Tier == Tier3) {
+		bgCmd := strings.TrimPrefix(command, "__BG__ ")
+		jobID, err := RunBackground(session, bgCmd)
+		if err != nil {
+			fmt.Fprintf(conn, "ERR %s\n", err.Error())
+			return
+		}
+		fmt.Fprintf(conn, "EXIT 0\n")
+		fmt.Fprintf(conn, "%s\n", jobID)
+		fmt.Fprintf(conn, "___DONE___\n")
+		return
+	}
+
+	if command == "__JOBS__" && (session.Tier == Tier2 || session.Tier == Tier3) {
+		output, err := ListJobs(session)
+		if err != nil {
+			fmt.Fprintf(conn, "ERR %s\n", err.Error())
+			return
+		}
+		fmt.Fprintf(conn, "EXIT 0\n")
+		fmt.Fprintf(conn, "%s\n", output)
+		fmt.Fprintf(conn, "___DONE___\n")
+		return
+	}
+
+	if strings.HasPrefix(command, "__JOBOUT__ ") && (session.Tier == Tier2 || session.Tier == Tier3) {
+		jobID := strings.TrimPrefix(command, "__JOBOUT__ ")
+		output, err := GetJobOutput(session, jobID)
+		if err != nil {
+			fmt.Fprintf(conn, "ERR %s\n", err.Error())
+			return
+		}
+		fmt.Fprintf(conn, "EXIT 0\n")
+		fmt.Fprintf(conn, "%s\n", output)
+		fmt.Fprintf(conn, "___DONE___\n")
+		return
+	}
+
+	if strings.HasPrefix(command, "__KILL__ ") && (session.Tier == Tier2 || session.Tier == Tier3) {
+		jobID := strings.TrimPrefix(command, "__KILL__ ")
+		err := KillJob(session, jobID)
+		if err != nil {
+			fmt.Fprintf(conn, "ERR %s\n", err.Error())
+			return
+		}
+		fmt.Fprintf(conn, "EXIT 0\n")
+		fmt.Fprintf(conn, "killed\n")
+		fmt.Fprintf(conn, "___DONE___\n")
+		return
+	}
+
 	output, exitCode, err := Run(session, command)
 	if err != nil {
 		fmt.Fprintf(conn, "ERR %s\n", err.Error())
