@@ -61,9 +61,18 @@ func sshArgs(host HostConfig) []string {
 	return append(args, target)
 }
 
+// InstallMode controls how agentd installation is handled during connect
+type InstallMode int
+
+const (
+	InstallPrompt InstallMode = iota // Ask user (default, interactive)
+	InstallYes                       // Auto-install without asking
+	InstallNo                        // Skip install, fall back to tier 1
+)
+
 // Connect establishes a persistent session to a host
 // Tries: tier 3 (daemon socket) → tier 2 (agentd pipe) → tier 1 (bash)
-func Connect(name string, host HostConfig) (*Session, error) {
+func Connect(name string, host HostConfig, installMode InstallMode) (*Session, error) {
 	sessionMu.Lock()
 	defer sessionMu.Unlock()
 
@@ -75,14 +84,27 @@ func Connect(name string, host HostConfig) (*Session, error) {
 		return session, nil
 	}
 
-	// Check if user wants to install agentd
-	if promptInstall(name, host) {
-		// Retry tier 3 after install
-		session, err = connectTier3(name, host)
-		if err == nil {
-			sessions[name] = session
-			defaultName = name
-			return session, nil
+	// Handle install based on mode
+	shouldInstall := false
+	switch installMode {
+	case InstallYes:
+		shouldInstall = true
+	case InstallNo:
+		shouldInstall = false
+	case InstallPrompt:
+		shouldInstall = promptInstall(name, host)
+	}
+
+	if shouldInstall {
+		fmt.Printf("Installing agentd on %s...\n", name)
+		if runInstall(host) {
+			// Retry tier 3 after install
+			session, err = connectTier3(name, host)
+			if err == nil {
+				sessions[name] = session
+				defaultName = name
+				return session, nil
+			}
 		}
 	}
 
@@ -208,11 +230,11 @@ func promptInstall(name string, host HostConfig) bool {
 		return false
 	}
 	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
-	if answer != "y" && answer != "yes" {
-		return false
-	}
+	return answer == "y" || answer == "yes"
+}
 
-	fmt.Printf("Installing agentd on %s...\n", name)
+// runInstall runs the install script on the remote
+func runInstall(host HostConfig) bool {
 	args := append(sshArgs(host),
 		"bash", "-c",
 		`curl -sSL https://raw.githubusercontent.com/MrPrinceRawat/agentd/main/install.sh | bash`,

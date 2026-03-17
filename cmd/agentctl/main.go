@@ -63,11 +63,21 @@ func main() {
 
 func cmdConnect() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: agentctl connect <name>")
+		fmt.Fprintln(os.Stderr, "usage: agentctl connect <name> [--yes|--no-install]")
 		os.Exit(1)
 	}
 
 	name := os.Args[2]
+	installMode := client.InstallPrompt
+	for _, arg := range os.Args[3:] {
+		switch arg {
+		case "--yes", "-y":
+			installMode = client.InstallYes
+		case "--no-install":
+			installMode = client.InstallNo
+		}
+	}
+
 	cfg, err := client.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
@@ -82,7 +92,7 @@ func cmdConnect() {
 
 	fmt.Printf("Connecting to %s (%s@%s)...\n", name, host.User, host.Host)
 
-	session, err := client.Connect(name, host)
+	session, err := client.Connect(name, host, installMode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed: %v\n", err)
 		os.Exit(1)
