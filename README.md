@@ -173,4 +173,4 @@ Then just tell Claude: "check the logs on my server" or "run training in the bac
 
 ## License
 
-MIT
+CC BY-NC 4.0 — free for non-commercial use.
